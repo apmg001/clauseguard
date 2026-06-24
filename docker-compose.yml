@@ -1,0 +1,27 @@
+# Phase 1 brings up the API alongside a Postgres+pgvector instance that later
+# phases use for the audit store and the retrieval index. The API runs against
+# the in-memory adapters until those are wired in.
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      CLAUSEGUARD_ENVIRONMENT: dev
+      CLAUSEGUARD_LOG_JSON: "true"
+    depends_on:
+      - db
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: clauseguard
+      POSTGRES_PASSWORD: clauseguard
+      POSTGRES_DB: clauseguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
