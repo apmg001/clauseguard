@@ -14,6 +14,7 @@ class DiscrepancyType(str, Enum):
     """Categories of discrepancy the reconciliation engine can detect."""
 
     RATE_MISMATCH = "rate_mismatch"
+    CURRENCY_MISMATCH = "currency_mismatch"
     ARITHMETIC_ERROR = "arithmetic_error"
     OUT_OF_TERM = "out_of_term"
     MISSED_VOLUME_DISCOUNT = "missed_volume_discount"
