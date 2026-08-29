@@ -27,6 +27,51 @@ def _money_str(value: Money) -> str:
     return f"{value.currency} {value.amount}"
 
 
+class CurrencyMismatchRule:
+    """Flag lines billed in a currency other than the contract's.
+
+    This runs before the amount-comparing rules and closes a real blind spot:
+    those rules compare ``Decimal`` amounts directly, so without this check a
+    line billed in the wrong currency would yield a meaningless "overcharge"
+    (comparing, say, 130 USD against 100 INR as bare numbers). No monetary
+    impact is emitted because converting requires an FX rate we do not have;
+    the finding's job is to stop the number being trusted at all.
+    """
+
+    name = "currency_mismatch"
+
+    def evaluate(
+        self, invoice: Invoice, contract: Contract
+    ) -> list[Discrepancy]:
+        """Flag any line whose billed currency differs from the contract's."""
+        findings: list[Discrepancy] = []
+        for line in invoice.line_items:
+            billed = line.unit_rate.currency
+            if billed == contract.currency:
+                continue
+            findings.append(
+                Discrepancy(
+                    type=DiscrepancyType.CURRENCY_MISMATCH,
+                    severity=Severity.HIGH,
+                    description=(
+                        f"Line {line.line_no} ({line.sku}) is billed in "
+                        f"{billed} but the contract is denominated in "
+                        f"{contract.currency}."
+                    ),
+                    citation=(
+                        f"Contract {contract.contract_id} base currency "
+                        f"{contract.currency}"
+                    ),
+                    invoice_line_no=line.line_no,
+                    expected=contract.currency,
+                    actual=billed,
+                    monetary_impact=None,
+                    confidence=0.99,
+                )
+            )
+        return findings
+
+
 class ArithmeticRule:
     """Check that quantity × unit_rate equals the printed line total."""
 
@@ -92,6 +137,8 @@ class RateMismatchRule:
             if entry is None:
                 continue  # handled by UncontractedItemRule
             contracted = entry.unit_rate
+            if line.unit_rate.currency != contracted.currency:
+                continue  # handled by CurrencyMismatchRule
             if line.unit_rate.amount > contracted.amount:
                 overcharge_per_unit = line.unit_rate.amount - contracted.amount
                 findings.append(
@@ -162,6 +209,8 @@ class MissedVolumeDiscountRule:
             entry = contract.rate_for(line.sku)
             if entry is None:
                 continue
+            if line.unit_rate.currency != entry.unit_rate.currency:
+                continue  # handled by CurrencyMismatchRule
             discount = entry.applicable_discount(line.quantity)
             if discount <= 0:
                 continue
@@ -238,6 +287,7 @@ def default_rules() -> list:
         A list of rule instances. Order is stable for reproducible output.
     """
     return [
+        CurrencyMismatchRule(),
         ArithmeticRule(),
         RateMismatchRule(),
         MissedVolumeDiscountRule(),
