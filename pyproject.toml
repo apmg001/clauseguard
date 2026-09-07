@@ -19,6 +19,7 @@ dependencies = [
 # Phase 2+ document/ML extras, kept optional so the core installs lean.
 ingestion = ["pdfplumber>=0.11"]
 matching = ["rapidfuzz>=3.6"]
+llm = ["httpx>=0.27"]
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",

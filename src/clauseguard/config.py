@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     review_confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
     arithmetic_tolerance: float = Field(default=0.01, ge=0.0)
 
+    # -- LLM provider (BYOK) ------------------------------------------------ #
+    # Defaults target a local Ollama server (privacy-first, no key, no data
+    # leaving the box). Point these at a hosted OpenAI-compatible API to trade
+    # privacy for speed. Injected into providers via the registry.
+    llm_provider_kind: Literal["openai_compatible"] = "openai_compatible"
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_model: str = "qwen2.5:3b"
+    llm_api_key: str = ""
+    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_max_retries: int = Field(default=2, ge=0, le=10)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

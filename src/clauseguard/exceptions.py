@@ -80,3 +80,18 @@ class AuditError(ClauseGuardError):
 # --------------------------------------------------------------------------- #
 class ConfigurationError(ClauseGuardError):
     """Raised when application configuration is invalid."""
+
+
+# --------------------------------------------------------------------------- #
+# LLM provider
+# --------------------------------------------------------------------------- #
+class LLMProviderError(ClauseGuardError):
+    """Base class for failures while talking to an LLM provider."""
+
+
+class TransientLLMError(LLMProviderError):
+    """A retryable provider failure (timeout, connection error, 429, 5xx)."""
+
+
+class PermanentLLMError(LLMProviderError):
+    """A non-retryable provider failure (auth, 4xx, malformed response)."""
