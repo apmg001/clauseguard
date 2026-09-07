@@ -11,18 +11,19 @@ every finding with a **citation** and a **monetary impact**, then writing an
 **audit record**.
 
 The design thesis: **the money math is deterministic and reproducible; a language
-model is used only for genuine language ambiguity, never for arithmetic, rules,
-or matching.** That is what makes the output audit-grade — an auditor can trace
-every finding back to a clause — and what lets the whole thing run on a 16 GB
-laptop with no accelerator, so no financial data ever has to leave the machine.
+model is used only for genuine language/layout ambiguity, never for arithmetic,
+rules, or matching.** That is what makes the output audit-grade — an auditor can
+trace every finding back to a clause — and what lets the whole thing run on a
+16 GB laptop with no accelerator, so no financial data ever has to leave the
+machine.
 
-> **Status:** working end-to-end. Both the invoice *and* the contract are parsed
-> from text and flow through the entire pipeline — ingestion → extraction →
-> matching → deterministic rules → cited findings + audit record. Verified by
-> **46 passing tests** and an evaluation harness that scores **100% precision and
-> recall across all six discrepancy types on a labeled set, with zero false
-> positives**. OCR for scanned documents and an optional local LLM slot in behind
-> interfaces that already exist, so the core never changes.
+> **Status:** working end-to-end, **62 passing tests**. A document flows through
+> the whole pipeline — ingestion → extraction → matching → deterministic rules →
+> cited findings + audit record. **Extraction is a three-tier architecture**
+> (structured text → layout-aware PDF geometry → LLM), all behind one interface.
+> An evaluation harness scores **100% precision/recall across all six discrepancy
+> types on a labeled set, with zero false positives**. OCR for scanned images is
+> the remaining ingestion frontier and slots in behind the existing port.
 
 ---
 
@@ -89,6 +90,31 @@ cases without changing.
 
 ---
 
+## Extraction: a three-tier architecture
+
+Turning a document into a validated `Invoice`/`Contract` is the hard part of the
+real-world problem, so extraction is tiered — each tier behind the same
+`InvoiceExtractor` port, so the caller picks the right one and nothing else
+changes:
+
+1. **Text tier** (`RuleBasedInvoiceExtractor` / `RuleBasedContractExtractor`) —
+   parses semi-structured text: pipe/tab/multi-space-delimited tables, aliased
+   header labels, currency-formatted amounts. Deterministic, fast, fail-loud.
+2. **Layout-aware tier** (`LayoutAwareInvoiceExtractor`) — the industry approach
+   for **digital PDFs**: reconstructs the line-item table from the page's
+   *geometry* (ruling lines / word alignment, via `pdfplumber`), not from
+   guessing at whitespace. Handles the single-space-column case that defeats
+   string parsing, infers currency from amount symbols, and falls back to the
+   letterhead for vendor. Tested against real generated PDFs.
+3. **LLM tier** (`LLMInvoiceExtractor`) — for chaotic layouts that defeat the
+   deterministic parsers. A model returns structured JSON via a BYOK provider
+   (local Ollama by default, or a hosted API). Every extracted value is
+   **grounding-checked against the source text**, so a hallucinated figure is
+   rejected — while a *genuine* invoice error, being present in the source,
+   passes through to the rules. The LLM never "fixes" numbers.
+
+---
+
 ## What it detects today
 
 Each check is a small, pure, reproducible rule; every finding carries a citation
@@ -103,34 +129,21 @@ and, where quantifiable, a monetary impact:
 | **Out-of-term dating** | Invoice dated outside the contract's validity window. |
 | **Uncontracted item** | A billed SKU absent from the contract rate card. |
 
-And the pipeline that feeds them is complete for structured / digital-text
-documents:
-
-- **Ingestion** — `NativePdfParser` reads native (text-layer) PDFs via
-  `pdfplumber`, and treats non-PDF input as text, decided by the PDF magic
-  number so plain text is never mistakenly fed to a PDF engine.
-- **Extraction** — `RuleBasedInvoiceExtractor` and `RuleBasedContractExtractor`
-  turn invoice/contract text into validated domain objects: column mapping by
-  header name (robust to reordering), `Decimal` money, and fail-loud on any
-  unparseable field.
-- **Matching → rules → confidence routing → audit** — a matched invoice runs
-  through every rule; low-confidence results are routed to human review.
-
 ---
 
 ## Runs on your hardware
 
 The deterministic engine is plain, exact Python — milliseconds per invoice, a
-few hundred MB of RAM. The optional LLM edge uses a **small local model** (via
-Ollama / llama.cpp) only for the rare genuinely ambiguous line.
+few hundred MB of RAM. The optional LLM tier uses a **small local model** (via
+Ollama / llama.cpp) only for the rare document a deterministic parser can't read.
 
 - **CPU-only, 16 GB RAM, no GPU** — the entire pipeline runs locally.
 - **No data leaves the box** — built for on-prem / air-gapped finance teams.
-- **Scales up, doesn't require scaling** — point the LLM adapter at a GPU for
+- **Scales up, doesn't require scaling** — point the LLM provider at a GPU for
   more throughput in production; nothing in the code changes.
 
 Reconciliation is a **batch** workload, not a chatbot, so per-token model speed
-is irrelevant: only the rare ambiguous line touches a model, in the background.
+is irrelevant: only the rare ambiguous document touches a model, in the background.
 
 ---
 
@@ -151,16 +164,16 @@ Each stage sits behind an interface, so it is independently swappable:
         │               │                   │             (deterministic)       │
    adapters.       adapters.           adapters.          rules.checks      adapters.
    ingestion       extraction          matching           (pure, reproducible) audit
-   (PDF / text)    (rule-based)        (heuristic →ML)                       (in-memory →DB)
+   (PDF / text)   (text/layout/LLM)   (heuristic →ML)                       (in-memory →DB)
 ```
 
 The orchestration depends only on the `ports/` interfaces. Swapping the
 heuristic matcher for a trained classifier, the in-memory audit log for a
-database, or adding an OCR ingestion adapter, is a one-line change in
-`api/dependencies.py` — no caller is touched.
+database, the LLM provider from Ollama to a hosted API, or adding an OCR
+ingestion adapter, is a localised change — no caller is touched.
 
 ### Core rules (enforced)
-- **Deterministic by default; the LLM is used only for genuine language ambiguity.**
+- **Deterministic by default; the LLM is used only for genuine language/layout ambiguity.**
 - **Never an LLM for arithmetic, rules, or matching.**
 - **Money is `Decimal`, never `float`.**
 - **Every discrepancy carries a citation and a confidence score.**
@@ -177,10 +190,19 @@ database, or adding an OCR ingestion adapter, is a one-line change in
   across currencies.
 - **Deterministic core, LLM only at the edges.** Correctness lives in pure,
   reproducible rules — not a model that can hallucinate. The LLM's job is narrow
-  (ambiguous line-to-SKU language), so a small local model suffices; no GPU.
-- **Fail loud, never silently wrong.** Extraction raises on any unparseable
-  field rather than producing a wrong `Invoice`. In finance, a silent wrong
-  number is far more dangerous than a loud failure.
+  (reading a messy document), so a small local model suffices; no GPU.
+- **Extraction reads geometry, not whitespace.** Real digital-PDF columns are
+  single-space-aligned, so the layout-aware tier reconstructs tables from the
+  PDF's ruling lines / word coordinates — the same approach real invoice-parsing
+  tools use — instead of guessing at spaces.
+- **LLM extraction is grounded, not trusted.** Every value a model claims to
+  extract must appear in the source text, or the extraction is rejected. This
+  catches invented figures without rejecting genuine invoice errors (which are
+  present in the source and are the rules engine's job to flag) — keeping the
+  output traceable even when extraction used an LLM.
+- **Fail loud, never silently wrong.** Extraction raises on any unparseable or
+  ungrounded field rather than producing a wrong `Invoice`. In finance, a silent
+  wrong number is far more dangerous than a loud failure.
 - **Measured, not asserted.** An evaluation harness scores detection against a
   labeled seeded-error set (precision / recall / F1, line-level), so "it works"
   is a number, not a claim — and coverage gaps show up honestly as misses.
@@ -188,9 +210,8 @@ database, or adding an OCR ingestion adapter, is a one-line change in
   citation — "audit-grade" is enforced at the type level, not by convention.
 - **Confidence + human-review routing.** Low-confidence results go to review, not
   auto-report; a tool that is confidently wrong is worse than one that asks.
-- **Ports & adapters.** Start simple (rule-based extraction, heuristic matching,
-  in-memory audit) and grow into OCR, trained models, and a database without
-  rewriting the orchestration.
+- **Ports & adapters.** Start simple and grow into OCR, trained models, hosted
+  LLMs, and a database without rewriting the orchestration.
 
 ---
 
@@ -202,15 +223,22 @@ venv tooling: `sudo apt install python3-venv python3-full -y`.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -e ".[dev,ingestion,matching]"
+pip install -e ".[dev,ingestion,matching,llm]"
 
-pytest -q                            # run the test suite (46 passing)
+pytest -q                            # run the test suite (62 passing)
 python scripts/run_demo.py           # watch two documents flow end-to-end
 python scripts/run_eval.py           # print the precision/recall metrics table
 uvicorn clauseguard.api.app:app --reload   # API at http://localhost:8000/docs
 ```
 
 A `Makefile` wraps these (`make dev`, `make test`, `make run`, `make demo`).
+
+**Using the LLM extraction tier (optional):** install a local model with
+[Ollama](https://ollama.com) (`ollama pull qwen2.5:3b`) and construct
+`LLMInvoiceExtractor(build_provider(get_settings()))`; the defaults already point
+at a local Ollama server, so no data leaves the machine and no key is needed.
+Point `CLAUSEGUARD_LLM_BASE_URL` / `CLAUSEGUARD_LLM_API_KEY` at a hosted
+OpenAI-compatible API to trade privacy for speed.
 
 ---
 
@@ -241,12 +269,14 @@ src/clauseguard/
   domain/              Pydantic models + enums (Decimal money, frozen value objects)
   ports/               interfaces: ingestion, extraction, matching, audit
   adapters/            concrete implementations behind the ports
+    extraction/        text-, layout-, and LLM-tier extractors + shared parsing
+  providers/           BYOK LLM provider abstraction (Ollama / hosted), + registry
   rules/               deterministic discrepancy engine (the heart)
   confidence/          scoring + human-review routing
   evaluation/          precision/recall harness over labeled seeded-error cases
   services/            ReconciliationService — the use-case orchestrator
   api/                 FastAPI app, routers, schemas, DI composition root
-tests/                 pytest suite (rules, extraction, ingestion, eval, service, domain)
+tests/                 pytest suite (rules, extraction, ingestion, providers, eval, service, domain)
 scripts/run_demo.py    end-to-end document-flow demo
 scripts/run_eval.py    evaluation harness CLI
 ```
@@ -257,14 +287,14 @@ scripts/run_eval.py    evaluation harness CLI
 
 - **OCR ingestion** — a scanned-document adapter behind the existing
   `DocumentParser` port (Tesseract / OpenVINO), for image-only PDFs.
-- **Hardened extraction** — robustness to the messier text real PDF extraction
-  emits (wrapped lines, collapsed columns).
 - **More detectors** — duplicate-invoice and unclaimed-SLA-penalty rules (the
   eval harness already reports these as coverage gaps).
 - **Smarter matching** — escalate only genuinely ambiguous invoice→contract
   matches to a small local LLM; a trained classifier with calibrated confidence.
-- **Larger evaluation set** — more cases, including hardened/real-document text,
-  measured by the same harness.
+- **Larger evaluation set** — more cases, including real-document text, measured
+  by the same harness.
+- **Layout-aware contract extraction** — extend the geometry-based approach to
+  contracts, as the invoice extractor already does.
 
 Each item slots in behind an interface that already exists in this codebase.
 
