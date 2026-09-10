@@ -62,7 +62,9 @@ class RuleBasedInvoiceExtractor:
 
         currency = header["currency"].upper()
         try:
-            column_index = _shared.build_column_index(self._split_row(lines[header_idx]))
+            column_index = _shared.build_column_index(
+                self._split_row(lines[header_idx])
+            )
         except ValueError as exc:
             raise InvoiceExtractionError(f"Line-item table {exc}") from exc
 

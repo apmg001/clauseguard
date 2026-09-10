@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from clauseguard.domain.enums import DiscrepancyType
 from clauseguard.evaluation.cases import BUILTIN_CASES
 from clauseguard.evaluation.harness import EvaluationHarness
 from clauseguard.evaluation.manifest import EvalCase, SeededError
-from clauseguard.domain.enums import DiscrepancyType
 
 
 def test_builtin_cases_score_perfectly() -> None:
