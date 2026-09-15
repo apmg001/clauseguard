@@ -17,11 +17,12 @@ trace every finding back to a clause — and what lets the whole thing run on a
 16 GB laptop with no accelerator, so no financial data ever has to leave the
 machine.
 
-> **Status:** working end-to-end, **62 passing tests**. A document flows through
-> the whole pipeline — ingestion → extraction → matching → deterministic rules →
-> cited findings + audit record. **Extraction is a three-tier architecture**
-> (structured text → layout-aware PDF geometry → LLM), all behind one interface.
-> An evaluation harness scores **100% precision/recall across all six discrepancy
+> **Status:** working end-to-end, **69 passing tests**. A raw document can be
+> POSTed to the HTTP API and flows through the whole pipeline — ingestion →
+> extraction → matching → deterministic rules → cited findings + audit record.
+> **Extraction is a three-tier architecture** (structured text → layout-aware
+> PDF geometry → LLM), unified behind one interface by a cascading extractor. An
+> evaluation harness scores **100% precision/recall across all six discrepancy
 > types on a labeled set, with zero false positives**. OCR for scanned images is
 > the remaining ingestion frontier and slots in behind the existing port.
 
@@ -55,6 +56,36 @@ Discrepancies (3):
 ```
 
 *(Synthetic data; real-document benchmarking is on the roadmap.)*
+
+---
+
+## HTTP API
+
+Run the API with `uvicorn clauseguard.api.app:app --reload` and open the
+interactive docs at `http://localhost:8000/docs`. Three endpoints:
+
+- **`GET /health`** — liveness probe.
+- **`POST /v1/reconcile`** — reconcile an *already-structured* invoice against
+  candidate contracts (JSON domain objects in the body). For callers that have
+  already parsed their documents.
+- **`POST /v1/reconcile-document`** — reconcile *raw documents*. The invoice and
+  each candidate contract are sent as base64-encoded bytes (a PDF or UTF-8 text);
+  the service runs the full ingestion → extraction → reconciliation chain and
+  returns the same result. This is the end-to-end "reads a vendor invoice" path.
+
+```bash
+# Reconcile a real invoice PDF against a contract, straight from files:
+curl -s localhost:8000/v1/reconcile-document \
+  -H 'content-type: application/json' \
+  -d "$(jq -n \
+        --arg inv "$(base64 -w0 invoice.pdf)" \
+        --arg con "$(base64 -w0 contract.txt)" \
+        '{invoice_document:  {content_base64:$inv, source_ref:"invoice.pdf"},
+          contract_documents:[{content_base64:$con, source_ref:"contract.txt"}]}')"
+```
+
+The document endpoint returns `400` for invalid base64 and `422` if a document
+cannot be parsed/extracted or reconciliation cannot complete.
 
 ---
 
@@ -94,8 +125,9 @@ cases without changing.
 
 Turning a document into a validated `Invoice`/`Contract` is the hard part of the
 real-world problem, so extraction is tiered — each tier behind the same
-`InvoiceExtractor` port, so the caller picks the right one and nothing else
-changes:
+`InvoiceExtractor` port, and a `CascadingInvoiceExtractor` tries them in order
+(first success wins), so the API and services depend on one interface while every
+tier stays independently testable and swappable:
 
 1. **Text tier** (`RuleBasedInvoiceExtractor` / `RuleBasedContractExtractor`) —
    parses semi-structured text: pipe/tab/multi-space-delimited tables, aliased
@@ -112,6 +144,9 @@ changes:
    **grounding-checked against the source text**, so a hallucinated figure is
    rejected — while a *genuine* invoice error, being present in the source,
    passes through to the rules. The LLM never "fixes" numbers.
+
+The document API cascades layout-aware → text; the LLM tier is added at the
+composition root when a provider is configured.
 
 ---
 
@@ -153,10 +188,11 @@ Each stage sits behind an interface, so it is independently swappable:
 
 ```
             ┌──────────────────────── API (FastAPI) ────────────────────────┐
-            │                  routers → schemas → DI wiring                  │
+            │   /health   /v1/reconcile   /v1/reconcile-document (document)  │
             └───────────────────────────────┬───────────────────────────────┘
                                             │
-                          services/ReconciliationService   ← orchestration only
+              DocumentReconciliationService  →  ReconciliationService
+              (parse → extract → reconcile)     (match → rules → score → audit)
                                             │ depends on PORTS, not adapters
         ┌───────────────┬───────────────────┼───────────────────┬───────────────┐
         ▼               ▼                   ▼                   ▼               ▼
@@ -164,7 +200,8 @@ Each stage sits behind an interface, so it is independently swappable:
         │               │                   │             (deterministic)       │
    adapters.       adapters.           adapters.          rules.checks      adapters.
    ingestion       extraction          matching           (pure, reproducible) audit
-   (PDF / text)   (text/layout/LLM)   (heuristic →ML)                       (in-memory →DB)
+   (PDF / text)   (text/layout/LLM,   (heuristic →ML)                       (in-memory →DB)
+                   via cascade)
 ```
 
 The orchestration depends only on the `ports/` interfaces. Swapping the
@@ -200,6 +237,9 @@ ingestion adapter, is a localised change — no caller is touched.
   catches invented figures without rejecting genuine invoice errors (which are
   present in the source and are the rules engine's job to flag) — keeping the
   output traceable even when extraction used an LLM.
+- **Tiered extraction behind one port.** A cascading extractor tries the cheap,
+  deterministic tiers first and only escalates when they fail, so cost and
+  latency stay low and the caller never knows which tier answered.
 - **Fail loud, never silently wrong.** Extraction raises on any unparseable or
   ungrounded field rather than producing a wrong `Invoice`. In finance, a silent
   wrong number is far more dangerous than a loud failure.
@@ -217,7 +257,7 @@ ingestion adapter, is a localised change — no caller is touched.
 
 ## Quickstart
 
-Tested on Ubuntu 24.04 (Python 3.12). On a fresh machine you may first need the
+Tested on Ubuntu 24.04 (Python 3.11+). On a fresh machine you may first need the
 venv tooling: `sudo apt install python3-venv python3-full -y`.
 
 ```bash
@@ -225,10 +265,10 @@ python3 -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev,ingestion,matching,llm]"
 
-pytest -q                            # run the test suite (62 passing)
+pytest -q                            # run the test suite (69 passing)
 python scripts/run_demo.py           # watch two documents flow end-to-end
 python scripts/run_eval.py           # print the precision/recall metrics table
-uvicorn clauseguard.api.app:app --reload   # API at http://localhost:8000/docs
+uvicorn clauseguard.api.app:app --reload   # API + docs at http://localhost:8000/docs
 ```
 
 A `Makefile` wraps these (`make dev`, `make test`, `make run`, `make demo`).
@@ -242,23 +282,6 @@ OpenAI-compatible API to trade privacy for speed.
 
 ---
 
-## Pipeline flow (the demo)
-
-`scripts/run_demo.py` starts from the **raw text of both documents** — what
-parsed documents yield — and runs the whole chain:
-
-```
-invoice text  -> NativePdfParser -> RuleBasedInvoiceExtractor  -> Invoice
-contract text -> NativePdfParser -> RuleBasedContractExtractor -> Contract
-                      |
-                      v
-    HeuristicMatcher -> RulesEngine -> ReconciliationResult
-    (match)            (deterministic  (citations + monetary
-                        checks)         impact + audit record)
-```
-
----
-
 ## Project structure
 
 ```
@@ -269,14 +292,15 @@ src/clauseguard/
   domain/              Pydantic models + enums (Decimal money, frozen value objects)
   ports/               interfaces: ingestion, extraction, matching, audit
   adapters/            concrete implementations behind the ports
-    extraction/        text-, layout-, and LLM-tier extractors + shared parsing
+    extraction/        text-, layout-, LLM-tier extractors, cascade + shared parsing
   providers/           BYOK LLM provider abstraction (Ollama / hosted), + registry
   rules/               deterministic discrepancy engine (the heart)
   confidence/          scoring + human-review routing
   evaluation/          precision/recall harness over labeled seeded-error cases
-  services/            ReconciliationService — the use-case orchestrator
+  services/            ReconciliationService + DocumentReconciliationService
   api/                 FastAPI app, routers, schemas, DI composition root
-tests/                 pytest suite (rules, extraction, ingestion, providers, eval, service, domain)
+tests/                 pytest suite (rules, extraction, ingestion, providers,
+                       eval, api, service, domain)
 scripts/run_demo.py    end-to-end document-flow demo
 scripts/run_eval.py    evaluation harness CLI
 ```
@@ -291,10 +315,10 @@ scripts/run_eval.py    evaluation harness CLI
   eval harness already reports these as coverage gaps).
 - **Smarter matching** — escalate only genuinely ambiguous invoice→contract
   matches to a small local LLM; a trained classifier with calibrated confidence.
-- **Larger evaluation set** — more cases, including real-document text, measured
-  by the same harness.
 - **Layout-aware contract extraction** — extend the geometry-based approach to
   contracts, as the invoice extractor already does.
+- **Larger evaluation set** — more cases, including real-document text, measured
+  by the same harness.
 
 Each item slots in behind an interface that already exists in this codebase.
 
