@@ -16,6 +16,7 @@ from clauseguard.adapters.extraction.cascading import CascadingInvoiceExtractor
 from clauseguard.adapters.extraction.layout_aware_invoice import (
     LayoutAwareInvoiceExtractor,
 )
+from clauseguard.adapters.extraction.llm_invoice import LLMInvoiceExtractor
 from clauseguard.adapters.extraction.rule_based_contract import (
     RuleBasedContractExtractor,
 )
@@ -24,7 +25,10 @@ from clauseguard.adapters.extraction.rule_based_invoice import (
 )
 from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
+from clauseguard.config import Settings, get_settings
 from clauseguard.ports.audit import AuditLog
+from clauseguard.ports.extraction import InvoiceExtractor
+from clauseguard.providers.registry import build_provider
 from clauseguard.rules.engine import RulesEngine
 from clauseguard.services.document_reconciliation import (
     DocumentReconciliationService,
@@ -47,6 +51,29 @@ def get_reconciliation_service() -> ReconciliationService:
     )
 
 
+def build_invoice_extractor(settings: Settings) -> InvoiceExtractor:
+    """Build the invoice-extraction cascade for the document pipeline.
+
+    Deterministic-first: layout-aware (digital-PDF geometry) then rule-based
+    text. When ``settings.enable_llm_extraction`` is set, the LLM tier is
+    appended as a last resort for layouts the deterministic tiers cannot parse
+    (its provider defaults to a local Ollama server).
+
+    Args:
+        settings: Application settings controlling the LLM tier.
+
+    Returns:
+        A :class:`CascadingInvoiceExtractor` over the enabled tiers.
+    """
+    tiers: list[InvoiceExtractor] = [
+        LayoutAwareInvoiceExtractor(),
+        RuleBasedInvoiceExtractor(),
+    ]
+    if settings.enable_llm_extraction:
+        tiers.append(LLMInvoiceExtractor(build_provider(settings)))
+    return CascadingInvoiceExtractor(tiers)
+
+
 def get_document_reconciliation_service() -> DocumentReconciliationService:
     """Assemble the document-in reconciliation service.
 
@@ -56,9 +83,7 @@ def get_document_reconciliation_service() -> DocumentReconciliationService:
     """
     return DocumentReconciliationService(
         parser=NativePdfParser(),
-        invoice_extractor=CascadingInvoiceExtractor(
-            [LayoutAwareInvoiceExtractor(), RuleBasedInvoiceExtractor()]
-        ),
+        invoice_extractor=build_invoice_extractor(get_settings()),
         contract_extractor=RuleBasedContractExtractor(),
         reconciliation_service=get_reconciliation_service(),
     )

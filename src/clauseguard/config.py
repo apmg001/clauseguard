@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # Defaults target a local Ollama server (privacy-first, no key, no data
     # leaving the box). Point these at a hosted OpenAI-compatible API to trade
     # privacy for speed. Injected into providers via the registry.
+    enable_llm_extraction: bool = False
+    """When True, the document cascade appends the LLM extraction tier
+    after the deterministic tiers. Off by default so tests/CI need no model."""
+
     llm_provider_kind: Literal["openai_compatible"] = "openai_compatible"
     llm_base_url: str = "http://localhost:11434/v1"
     llm_model: str = "qwen2.5:3b"

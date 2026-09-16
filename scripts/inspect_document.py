@@ -8,8 +8,11 @@ on a messy real-world PDF, this shows *why* a tier failed, not just that it did.
 
 Usage:
     python scripts/inspect_document.py INVOICE.pdf [CONTRACT.pdf|CONTRACT.txt]
+    python scripts/inspect_document.py INVOICE.pdf --llm      # add the LLM tier
 
-Both arguments may be PDFs or plain-text files; the parser detects which.
+``--llm`` appends the LLM extraction tier to the cascade (needs a running
+provider, e.g. a local Ollama server) so chaotic layouts the deterministic tiers
+cannot parse get a last-resort attempt.
 """
 
 from __future__ import annotations
@@ -20,18 +23,13 @@ import sys
 from pathlib import Path
 
 from clauseguard.adapters.audit.in_memory import InMemoryAuditLog
-from clauseguard.adapters.extraction.cascading import CascadingInvoiceExtractor
-from clauseguard.adapters.extraction.layout_aware_invoice import (
-    LayoutAwareInvoiceExtractor,
-)
 from clauseguard.adapters.extraction.rule_based_contract import (
     RuleBasedContractExtractor,
 )
-from clauseguard.adapters.extraction.rule_based_invoice import (
-    RuleBasedInvoiceExtractor,
-)
 from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
+from clauseguard.api.dependencies import build_invoice_extractor
+from clauseguard.config import get_settings
 from clauseguard.exceptions import (
     ContractExtractionError,
     DocumentParseError,
@@ -68,26 +66,29 @@ def _inspect_parse(path: Path) -> ParsedDocument:
     return document
 
 
-def _invoice_extractor() -> CascadingInvoiceExtractor:
-    return CascadingInvoiceExtractor(
-        [LayoutAwareInvoiceExtractor(), RuleBasedInvoiceExtractor()]
-    )
-
-
 def main(argv: list[str] | None = None) -> int:
     """Entry point.
 
     Returns:
-        Process exit code (0 on success, 1 if extraction of the invoice failed).
+        Process exit code (0 on success, 1 if invoice extraction failed).
     """
     parser = argparse.ArgumentParser(description="Inspect a document end-to-end.")
     parser.add_argument("invoice", type=Path, help="Invoice PDF or text file.")
     parser.add_argument(
         "contract", type=Path, nargs="?", help="Optional contract PDF or text file."
     )
+    parser.add_argument(
+        "--llm", action="store_true",
+        help="Append the LLM extraction tier (needs a running provider).",
+    )
     args = parser.parse_args(argv)
 
-    logging.getLogger().setLevel(logging.WARNING)  # keep output readable
+    logging.getLogger().setLevel(logging.WARNING)
+
+    settings = get_settings().model_copy(update={"enable_llm_extraction": args.llm})
+    invoice_extractor = build_invoice_extractor(settings)
+    if args.llm:
+        print("(LLM tier ENABLED — will try layout -> text -> LLM)")
 
     try:
         invoice_doc = _inspect_parse(args.invoice)
@@ -97,10 +98,10 @@ def main(argv: list[str] | None = None) -> int:
 
     _banner("EXTRACTION — invoice")
     try:
-        invoice = _invoice_extractor().extract(invoice_doc)
+        invoice = invoice_extractor.extract(invoice_doc)
     except InvoiceExtractionError as exc:
-        print("Invoice extraction FAILED (all tiers). This is the useful signal —")
-        print("it shows which tiers failed and why on a real document:\n")
+        print("Invoice extraction FAILED (all enabled tiers). This is the useful")
+        print("signal — it shows which tiers failed and why on a real document:\n")
         print(exc)
         return 1
     print("Invoice extracted successfully:")
