@@ -23,11 +23,14 @@ from clauseguard.adapters.extraction.rule_based_contract import (
 from clauseguard.adapters.extraction.rule_based_invoice import (
     RuleBasedInvoiceExtractor,
 )
+from clauseguard.adapters.ingestion.fallback import FallbackDocumentParser
+from clauseguard.adapters.ingestion.ocr import OcrDocumentParser
 from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
 from clauseguard.config import Settings, get_settings
 from clauseguard.ports.audit import AuditLog
 from clauseguard.ports.extraction import InvoiceExtractor
+from clauseguard.ports.ingestion import DocumentParser
 from clauseguard.providers.registry import build_provider
 from clauseguard.rules.engine import RulesEngine
 from clauseguard.services.document_reconciliation import (
@@ -74,6 +77,25 @@ def build_invoice_extractor(settings: Settings) -> InvoiceExtractor:
     return CascadingInvoiceExtractor(tiers)
 
 
+def build_document_parser(settings: Settings) -> DocumentParser:
+    """Build the document parser for the pipeline.
+
+    Native text-layer parsing by default; when ``settings.enable_ocr`` is set,
+    wrap it in a fallback that routes scanned/image PDFs (little recovered text)
+    to the OCR parser. The OCR toolchain must be installed for this to work.
+
+    Args:
+        settings: Application settings controlling OCR fallback.
+
+    Returns:
+        A :class:`DocumentParser`.
+    """
+    native = NativePdfParser()
+    if not settings.enable_ocr:
+        return native
+    return FallbackDocumentParser(primary=native, ocr=OcrDocumentParser())
+
+
 def get_document_reconciliation_service() -> DocumentReconciliationService:
     """Assemble the document-in reconciliation service.
 
@@ -82,7 +104,7 @@ def get_document_reconciliation_service() -> DocumentReconciliationService:
     adding the LLM tier is a change here only.
     """
     return DocumentReconciliationService(
-        parser=NativePdfParser(),
+        parser=build_document_parser(get_settings()),
         invoice_extractor=build_invoice_extractor(get_settings()),
         contract_extractor=RuleBasedContractExtractor(),
         reconciliation_service=get_reconciliation_service(),

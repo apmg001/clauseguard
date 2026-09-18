@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     # Defaults target a local Ollama server (privacy-first, no key, no data
     # leaving the box). Point these at a hosted OpenAI-compatible API to trade
     # privacy for speed. Injected into providers via the registry.
+    enable_ocr: bool = False
+    """When True, the document parser falls back to OCR (Tesseract) for
+    scanned/image PDFs with no text layer. Off by default (needs the OCR
+    toolchain installed)."""
+
     enable_llm_extraction: bool = False
     """When True, the document cascade appends the LLM extraction tier
     after the deterministic tiers. Off by default so tests/CI need no model."""
