@@ -58,3 +58,14 @@ def test_fallback_escalates_to_ocr_when_primary_empty() -> None:
     parser = FallbackDocumentParser(primary=primary, ocr=ocr)
     doc = parser.parse(b"%PDF-scan", source_ref="scan.pdf")
     assert "via OCR" in doc.text
+
+
+def test_preprocess_returns_greyscale_image() -> None:
+    from PIL import Image
+
+    from clauseguard.adapters.ingestion.ocr import preprocess_for_ocr
+
+    colour = Image.new("RGB", (12, 12), (10, 200, 60))
+    out = preprocess_for_ocr(colour)
+    assert out.mode == "L"          # greyscaled
+    assert out.size == (12, 12)     # dimensions preserved

@@ -24,7 +24,10 @@ from clauseguard.adapters.extraction.rule_based_invoice import (
     RuleBasedInvoiceExtractor,
 )
 from clauseguard.adapters.ingestion.fallback import FallbackDocumentParser
-from clauseguard.adapters.ingestion.ocr import OcrDocumentParser
+from clauseguard.adapters.ingestion.ocr import (
+    OcrDocumentParser,
+    TesseractOcrBackend,
+)
 from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
 from clauseguard.config import Settings, get_settings
@@ -93,7 +96,12 @@ def build_document_parser(settings: Settings) -> DocumentParser:
     native = NativePdfParser()
     if not settings.enable_ocr:
         return native
-    return FallbackDocumentParser(primary=native, ocr=OcrDocumentParser())
+    ocr = OcrDocumentParser(
+        TesseractOcrBackend(
+            dpi=settings.ocr_dpi, psm=settings.ocr_psm, lang=settings.ocr_lang
+        )
+    )
+    return FallbackDocumentParser(primary=native, ocr=ocr)
 
 
 def get_document_reconciliation_service() -> DocumentReconciliationService:

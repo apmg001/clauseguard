@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     scanned/image PDFs with no text layer. Off by default (needs the OCR
     toolchain installed)."""
 
+    ocr_dpi: int = Field(default=400, ge=72, le=1200)
+    ocr_psm: int = Field(default=6, ge=0, le=13)
+    ocr_lang: str = "eng"
+
     enable_llm_extraction: bool = False
     """When True, the document cascade appends the LLM extraction tier
     after the deterministic tiers. Off by default so tests/CI need no model."""

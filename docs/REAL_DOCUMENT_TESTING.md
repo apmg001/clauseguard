@@ -65,3 +65,42 @@ Four concrete, real-world reasons this document defeats deterministic extraction
 
 Deterministic tiers cover clean, structured digital PDFs; documents like this GST
 invoice are the frontier the roadmap items above address.
+
+## Scanned documents: OCR → LLM, and the limits of OCR
+
+The same invoice was rasterised to an **image-only PDF** (no text layer — a
+stand-in for a scan) and run with OCR + LLM enabled:
+
+```bash
+python scripts/inspect_document.py scanned_invoice.pdf --ocr --llm
+```
+
+**The full stack ran end to end:** the native parser found no text → the parser
+fell back to **Tesseract OCR** (recovered ~680 chars) → the cascade's **LLM tier**
+structured that OCR text into all five line items with the correct vendor, date,
+invoice id, and currency. That is ingestion-OCR → LLM-extraction → structured
+data, on a scan, entirely on a 16 GB laptop.
+
+**But OCR is lossy, and the errors are visible and instructive.** Tesseract
+misread the ₹ glyph as digits/symbols, so some amounts came through wrong (e.g.
+unit rate `21000` for ₹1,000; `7899` for ₹899). The LLM transcribed faithfully —
+it did *not* invent — and the **grounding check passed**, because the wrong
+numbers really were present in the OCR text.
+
+The lesson is the important part:
+
+- **Grounding catches hallucination, not misreads.** It verifies the model didn't
+  invent a value; it cannot know the *source itself* (OCR) was wrong. Upstream
+  (OCR) errors propagate past a correct extractor and a correct grounding check.
+- **OCR accuracy is an ingestion-side problem** and is addressed with
+  ingestion-side levers — greyscale + autocontrast preprocessing, higher DPI, and
+  page-segmentation tuning (all configurable on `TesseractOcrBackend`). A blind
+  numeric "cleanup" of OCR output is *not* done, because a misread `21000` is
+  indistinguishable from a genuine `21000`; correcting digits blind would corrupt
+  good data.
+- **The right long-term fix** for glyph-level accuracy is a stronger OCR/layout
+  model (e.g. a document-AI model), not post-hoc string surgery.
+
+This is the honest frontier: the architecture handles scans end to end, and its
+failure mode is now understood and located precisely — at the OCR front-end, not
+in extraction or reconciliation.
