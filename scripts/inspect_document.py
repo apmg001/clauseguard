@@ -9,10 +9,11 @@ on a messy real-world PDF, this shows *why* a tier failed, not just that it did.
 Usage:
     python scripts/inspect_document.py INVOICE.pdf [CONTRACT.pdf|CONTRACT.txt]
     python scripts/inspect_document.py INVOICE.pdf --llm      # add the LLM tier
+    python scripts/inspect_document.py SCAN.pdf --ocr --llm   # OCR a scanned PDF
 
-``--llm`` appends the LLM extraction tier to the cascade (needs a running
-provider, e.g. a local Ollama server) so chaotic layouts the deterministic tiers
-cannot parse get a last-resort attempt.
+``--llm`` appends the LLM extraction tier (needs a running provider, e.g. local
+Ollama). ``--ocr`` enables OCR fallback for scanned/image PDFs (needs the OCR
+toolchain: tesseract + poppler and the ``ocr`` extra).
 """
 
 from __future__ import annotations
@@ -26,16 +27,18 @@ from clauseguard.adapters.audit.in_memory import InMemoryAuditLog
 from clauseguard.adapters.extraction.rule_based_contract import (
     RuleBasedContractExtractor,
 )
-from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
-from clauseguard.api.dependencies import build_invoice_extractor
+from clauseguard.api.dependencies import (
+    build_document_parser,
+    build_invoice_extractor,
+)
 from clauseguard.config import get_settings
 from clauseguard.exceptions import (
     ContractExtractionError,
     DocumentParseError,
     InvoiceExtractionError,
 )
-from clauseguard.ports.ingestion import ParsedDocument
+from clauseguard.ports.ingestion import DocumentParser, ParsedDocument
 from clauseguard.rules.engine import RulesEngine
 from clauseguard.services.reconciliation import ReconciliationService
 
@@ -46,9 +49,9 @@ def _banner(title: str) -> None:
     print(f"\n{RULE}\n{title}\n{RULE}")
 
 
-def _inspect_parse(path: Path) -> ParsedDocument:
+def _inspect_parse(path: Path, parser: DocumentParser) -> ParsedDocument:
     """Parse a file and print what the ingestion layer recovered."""
-    document = NativePdfParser().parse(path.read_bytes(), source_ref=path.name)
+    document = parser.parse(path.read_bytes(), source_ref=path.name)
     _banner(f"INGESTION — {path.name}")
     print(f"pages:          {document.page_count}")
     print(f"text chars:     {len(document.text)}")
@@ -81,17 +84,26 @@ def main(argv: list[str] | None = None) -> int:
         "--llm", action="store_true",
         help="Append the LLM extraction tier (needs a running provider).",
     )
+    parser.add_argument(
+        "--ocr", action="store_true",
+        help="Enable OCR fallback for scanned PDFs (needs the OCR toolchain).",
+    )
     args = parser.parse_args(argv)
 
     logging.getLogger().setLevel(logging.WARNING)
 
-    settings = get_settings().model_copy(update={"enable_llm_extraction": args.llm})
+    settings = get_settings().model_copy(
+        update={"enable_llm_extraction": args.llm, "enable_ocr": args.ocr}
+    )
+    doc_parser = build_document_parser(settings)
     invoice_extractor = build_invoice_extractor(settings)
+    if args.ocr:
+        print("(OCR fallback ENABLED — scanned PDFs go through OCR)")
     if args.llm:
         print("(LLM tier ENABLED — will try layout -> text -> LLM)")
 
     try:
-        invoice_doc = _inspect_parse(args.invoice)
+        invoice_doc = _inspect_parse(args.invoice, doc_parser)
     except (FileNotFoundError, DocumentParseError) as exc:
         print(f"\nFAILED to read/parse invoice: {exc}")
         return 1
@@ -120,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        contract_doc = _inspect_parse(args.contract)
+        contract_doc = _inspect_parse(args.contract, doc_parser)
         contract = RuleBasedContractExtractor().extract(contract_doc)
     except (FileNotFoundError, DocumentParseError, ContractExtractionError) as exc:
         print(f"\nContract parse/extract FAILED: {exc}")
