@@ -45,7 +45,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = get_logger(__name__)
 
 
-def preprocess_for_ocr(image: "Image") -> "Image":
+def preprocess_for_ocr(image: Image) -> Image:
     """Greyscale + autocontrast an image to improve OCR legibility.
 
     Conservative on purpose: greyscale and contrast normalisation reliably help
