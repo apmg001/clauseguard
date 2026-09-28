@@ -8,3 +8,5 @@ venv/
 .env
 dist/
 build/
+*.tar.gz
+*.patch
