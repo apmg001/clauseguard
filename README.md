@@ -17,7 +17,7 @@ trace every finding back to a clause — and what lets the whole thing run on a
 16 GB laptop with no accelerator, so no financial data ever has to leave the
 machine.
 
-> **Status:** working end-to-end, **69 passing tests**. A raw document can be
+> **Status:** working end-to-end, **85 passing tests**. A raw document can be
 > POSTed to the HTTP API and flows through the whole pipeline — ingestion →
 > extraction → matching → deterministic rules → cited findings + audit record.
 > **Extraction is a three-tier architecture** (structured text → layout-aware
@@ -189,8 +189,9 @@ composition root when a provider is configured.
 
 ## What it detects today
 
-Each check is a small, pure, reproducible rule; every finding carries a citation
-and, where quantifiable, a monetary impact:
+Each per-invoice check is a small, pure, reproducible rule; every finding carries
+a citation and, where quantifiable, a monetary impact. Duplicate detection is the
+one *stateful* check, so it sits outside the pure rules engine (see below):
 
 | Discrepancy | What it catches |
 | --- | --- |
@@ -200,6 +201,7 @@ and, where quantifiable, a monetary impact:
 | **Missed volume discount** | An earned volume-discount tier that was not applied. |
 | **Out-of-term dating** | Invoice dated outside the contract's validity window. |
 | **Uncontracted item** | A billed SKU absent from the contract rate card. |
+| **Duplicate invoice** *(stateful)* | A resubmission of an invoice already seen (same vendor + id), flagged with the full re-payment as impact. Runs in the service behind its own port, not in the pure rules engine. |
 
 ---
 
@@ -248,10 +250,12 @@ ingestion adapter, is a localised change — no caller is touched.
 
 ### Core rules (enforced)
 - **Deterministic by default; the LLM is used only for genuine language/layout ambiguity.**
-- **Never an LLM for arithmetic, rules, or matching.**
+- **Never an LLM for arithmetic, rules, matching, or duplicate detection.**
 - **Money is `Decimal`, never `float`.**
 - **Every discrepancy carries a citation and a confidence score.**
 - **Rules are pure and reproducible; the engine isolates per-rule failures.**
+- **Duplicate detection is stateful, so it lives behind its own port — not in the
+  pure rules engine — and is invoked by the service (in-memory now, durable store later).**
 
 ---
 
@@ -303,7 +307,7 @@ python3 -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev,ingestion,matching,llm]"
 
-pytest -q                            # run the test suite (69 passing)
+pytest -q                            # run the test suite (85 passing)
 python scripts/run_demo.py           # watch two documents flow end-to-end
 python scripts/run_eval.py           # print the precision/recall metrics table
 uvicorn clauseguard.api.app:app --reload   # API + docs at http://localhost:8000/docs
@@ -328,9 +332,10 @@ src/clauseguard/
   logging_config.py    structured logging (never print)
   exceptions.py        custom exception hierarchy
   domain/              Pydantic models + enums (Decimal money, frozen value objects)
-  ports/               interfaces: ingestion, extraction, matching, audit
+  ports/               interfaces: ingestion, extraction, matching, deduplication, audit
   adapters/            concrete implementations behind the ports
     extraction/        text-, layout-, LLM-tier extractors, cascade + shared parsing
+    dedup/             stateful duplicate-invoice detector (in-memory → durable)
   providers/           BYOK LLM provider abstraction (Ollama / hosted), + registry
   rules/               deterministic discrepancy engine (the heart)
   confidence/          scoring + human-review routing
@@ -349,16 +354,17 @@ docs/REAL_DOCUMENT_TESTING.md  real-invoice test + root-cause analysis
 
 ## Roadmap
 
-- **Wire the LLM tier into the document cascade** — the direct answer to the
-  real-invoice failure above; needs a configured provider (e.g. local Ollama).
-- **OCR ingestion** — a scanned-document adapter behind the existing
-  `DocumentParser` port (Tesseract / OpenVINO), for image-only PDFs.
-- **More detectors** — duplicate-invoice and unclaimed-SLA-penalty rules (the
-  eval harness already reports these as coverage gaps).
+- **SLA-penalty detection** — a detector for unclaimed service-level penalties.
+  This needs the contract schema to carry SLA terms and the invoice/delivery
+  data to carry the actual service metric; it is deliberately *not* stubbed as a
+  dangling enum value until that model exists.
+- **Durable duplicate + audit stores** — swap the in-memory duplicate detector
+  and audit log for a shared, tamper-evident store (database / ledger) behind the
+  existing ports, for multi-process deployments.
 - **Richer schema** — represent tax lines (GST/CGST/SGST) and item-as-description
   invoices like the one in Real-document testing.
 - **Smarter matching** — a trained invoice→contract classifier with calibrated
-  confidence.
+  confidence, replacing the heuristic vendor-name matcher behind the same port.
 - **Layout-aware contract extraction** — extend the geometry-based approach to
   contracts, as the invoice extractor already does.
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from clauseguard.adapters.audit.in_memory import InMemoryAuditLog
+from clauseguard.adapters.dedup.in_memory import InMemoryDuplicateDetector
 from clauseguard.adapters.extraction.cascading import CascadingInvoiceExtractor
 from clauseguard.adapters.extraction.layout_aware_invoice import (
     LayoutAwareInvoiceExtractor,
@@ -32,6 +33,7 @@ from clauseguard.adapters.ingestion.pdf_parser import NativePdfParser
 from clauseguard.adapters.matching.heuristic import HeuristicMatcher
 from clauseguard.config import Settings, get_settings
 from clauseguard.ports.audit import AuditLog
+from clauseguard.ports.deduplication import DuplicateDetector
 from clauseguard.ports.extraction import InvoiceExtractor
 from clauseguard.ports.ingestion import DocumentParser
 from clauseguard.providers.registry import build_provider
@@ -48,12 +50,23 @@ def get_audit_log() -> AuditLog:
     return InMemoryAuditLog()
 
 
+@lru_cache(maxsize=1)
+def get_duplicate_detector() -> DuplicateDetector:
+    """Return the process-wide duplicate-detector singleton.
+
+    A singleton so invoice fingerprints persist across requests within the
+    process; a shared/durable store slots in here for multi-process deployments.
+    """
+    return InMemoryDuplicateDetector()
+
+
 def get_reconciliation_service() -> ReconciliationService:
     """Assemble and return a :class:`ReconciliationService`."""
     return ReconciliationService(
         matcher=HeuristicMatcher(),
         rules_engine=RulesEngine(),
         audit_log=get_audit_log(),
+        duplicate_detector=get_duplicate_detector(),
     )
 
 

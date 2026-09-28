@@ -19,7 +19,6 @@ class DiscrepancyType(str, Enum):
     OUT_OF_TERM = "out_of_term"
     MISSED_VOLUME_DISCOUNT = "missed_volume_discount"
     DUPLICATE_INVOICE = "duplicate_invoice"
-    UNCLAIMED_SLA_PENALTY = "unclaimed_sla_penalty"
     UNCONTRACTED_ITEM = "uncontracted_item"
 
 

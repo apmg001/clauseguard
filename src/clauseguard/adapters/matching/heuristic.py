@@ -1,9 +1,14 @@
 """Adapter: heuristic invoice-to-contract matcher (Phase 1).
 
-Matches on vendor name using exact comparison first, then fuzzy similarity
-(``rapidfuzz`` when available, with a stdlib fallback). Phase 3 replaces this
-with a trained classical-ML classifier over engineered features, behind the
-same :class:`InvoiceContractMatcher` port.
+Matches on vendor name only: exact comparison first, then fuzzy similarity
+(``rapidfuzz`` when available, with a stdlib ``difflib`` fallback). A candidate
+is accepted only if it clears the configured acceptance threshold; otherwise the
+invoice is returned unmatched rather than forced onto a weak contract.
+
+This is intentionally simple and transparent for Phase 1. A trained classifier
+over engineered features (vendor, amounts, dates, line overlap) is a roadmap
+item that would slot in behind the same :class:`InvoiceContractMatcher` port
+with no change to callers — it is **not** implemented here today.
 """
 
 from __future__ import annotations

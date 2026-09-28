@@ -69,6 +69,13 @@ class ReconciliationError(ClauseGuardError):
 
 
 # --------------------------------------------------------------------------- #
+# Deduplication
+# --------------------------------------------------------------------------- #
+class DeduplicationError(ClauseGuardError):
+    """Raised when the duplicate-invoice store cannot be read or written."""
+
+
+# --------------------------------------------------------------------------- #
 # Audit
 # --------------------------------------------------------------------------- #
 class AuditError(ClauseGuardError):
